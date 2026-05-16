@@ -37,6 +37,13 @@ interface Explosion {
   size: number
 }
 
+interface HitEffect {
+  id: number
+  x: number
+  y: number
+  frame: number
+}
+
 interface Star {
   x: number
   y: number
@@ -58,13 +65,13 @@ const BOSS_HEIGHT = 80
 
 // Alien types configuration
 const ALIEN_CONFIG = {
-  1: { health: 1, points: 100, canShoot: false, shootRate: 0, color: "#00ff88", name: "Scout" },
-  2: { health: 2, points: 200, canShoot: true, shootRate: 3000, color: "#ff6b35", name: "Fighter" },
-  3: { health: 3, points: 300, canShoot: true, shootRate: 2000, color: "#ff2255", name: "Hunter" },
-  // Boss types
-  4: { health: 8, points: 1000, canShoot: true, shootRate: 1200, color: "#aa00ff", name: "Destroyer" },
-  5: { health: 12, points: 1500, canShoot: true, shootRate: 800, color: "#ff00aa", name: "Annihilator" },
-  6: { health: 20, points: 2500, canShoot: true, shootRate: 600, color: "#ffaa00", name: "Overlord" },
+  1: { health: 2, points: 100, canShoot: false, shootRate: 0, color: "#00ff88", name: "Scout" },
+  2: { health: 4, points: 200, canShoot: true, shootRate: 3000, color: "#ff6b35", name: "Fighter" },
+  3: { health: 6, points: 300, canShoot: true, shootRate: 2000, color: "#ff2255", name: "Hunter" },
+  // Boss types - much higher health, need many hits to kill
+  4: { health: 25, points: 1000, canShoot: true, shootRate: 1500, color: "#aa00ff", name: "Destroyer" },
+  5: { health: 40, points: 1500, canShoot: true, shootRate: 1200, color: "#ff00aa", name: "Annihilator" },
+  6: { health: 60, points: 2500, canShoot: true, shootRate: 1000, color: "#ffaa00", name: "Overlord" },
 }
 
 export default function SpaceCarGame() {
@@ -78,7 +85,9 @@ export default function SpaceCarGame() {
   const [enemyBullets, setEnemyBullets] = useState<EnemyBullet[]>([])
   const [aliens, setAliens] = useState<Alien[]>([])
   const [explosions, setExplosions] = useState<Explosion[]>([])
+  const [hitEffects, setHitEffects] = useState<HitEffect[]>([])
   const [stars, setStars] = useState<Star[]>([])
+  const [screenShake, setScreenShake] = useState(0)
   const [isInvincible, setIsInvincible] = useState(false)
   
   const keysRef = useRef<Set<string>>(new Set())
@@ -86,6 +95,7 @@ export default function SpaceCarGame() {
   const enemyBulletIdRef = useRef(0)
   const alienIdRef = useRef(0)
   const explosionIdRef = useRef(0)
+  const hitEffectIdRef = useRef(0)
   const lastShotRef = useRef(0)
   const gameLoopRef = useRef<number | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -160,6 +170,19 @@ export default function SpaceCarGame() {
       size,
     }
     setExplosions((prev) => [...prev, explosion])
+    // Screen shake for explosions
+    setScreenShake(size > 80 ? 8 : 4)
+    setTimeout(() => setScreenShake(0), 150)
+  }, [])
+
+  const createHitEffect = useCallback((x: number, y: number) => {
+    const hitEffect: HitEffect = {
+      id: hitEffectIdRef.current++,
+      x,
+      y,
+      frame: 0,
+    }
+    setHitEffects((prev) => [...prev, hitEffect])
   }, [])
 
   const startGame = useCallback(() => {
@@ -172,6 +195,8 @@ export default function SpaceCarGame() {
     setEnemyBullets([])
     setAliens([])
     setExplosions([])
+    setHitEffects([])
+    setScreenShake(0)
     setIsInvincible(false)
     keysRef.current.clear()
     containerRef.current?.focus()
@@ -391,7 +416,14 @@ export default function SpaceCarGame() {
       setExplosions((prev) =>
         prev
           .map((e) => ({ ...e, frame: e.frame + 1 }))
-          .filter((e) => e.frame < 12)
+          .filter((e) => e.frame < 20)
+      )
+
+      // Update hit effects
+      setHitEffects((prev) =>
+        prev
+          .map((h) => ({ ...h, frame: h.frame + 1 }))
+          .filter((h) => h.frame < 8)
       )
 
       // Check bullet-alien collisions
@@ -416,12 +448,16 @@ export default function SpaceCarGame() {
               ) {
                 bulletsToRemove.add(bullet.id)
                 newAliens[index] = { ...alien, health: alien.health - 1 }
+                
+                // Create hit effect for visual feedback
+                createHitEffect(bullet.x, bullet.y)
+                
                 if (newAliens[index].health <= 0) {
                   const config = ALIEN_CONFIG[alien.type as keyof typeof ALIEN_CONFIG]
                   createExplosion(
                     alien.x + alienW / 2,
                     alien.y + alienH / 2,
-                    isBoss ? 100 : 60
+                    isBoss ? 120 : 60
                   )
                   scoreIncrease += config.points
                 }
@@ -541,7 +577,7 @@ export default function SpaceCarGame() {
         cancelAnimationFrame(gameLoopRef.current)
       }
     }
-  }, [gameState, level, spawnAlien, createExplosion, isInvincible])
+  }, [gameState, level, spawnAlien, createExplosion, createHitEffect, isInvincible])
 
   const renderAlien = (alien: Alien) => {
     const isBoss = alien.type >= 4
@@ -667,13 +703,14 @@ export default function SpaceCarGame() {
         className="relative outline-none"
         style={{ width: GAME_WIDTH, height: GAME_HEIGHT }}
       >
-        {/* Game container with border */}
+        {/* Game container with border and screen shake */}
         <div
-          className="absolute inset-0 rounded-lg overflow-hidden"
+          className="absolute inset-0 rounded-lg overflow-hidden transition-transform duration-75"
           style={{
             background: "linear-gradient(180deg, #0a0a1a 0%, #0f1629 50%, #0a0a1a 100%)",
             boxShadow: "0 0 40px rgba(0, 200, 255, 0.2), inset 0 0 60px rgba(0, 0, 0, 0.5)",
             border: "2px solid rgba(0, 200, 255, 0.3)",
+            transform: screenShake ? `translate(${(Math.random() - 0.5) * screenShake}px, ${(Math.random() - 0.5) * screenShake}px)` : 'none',
           }}
         >
           {/* Stars */}
@@ -826,7 +863,7 @@ export default function SpaceCarGame() {
           {/* Aliens */}
           {aliens.map(renderAlien)}
 
-          {/* Explosions */}
+          {/* Explosions - enhanced animation */}
           {explosions.map((explosion) => (
             <div
               key={explosion.id}
@@ -838,42 +875,106 @@ export default function SpaceCarGame() {
                 height: explosion.size,
               }}
             >
-              <svg viewBox="0 0 60 60" className="w-full h-full">
+              <svg viewBox="0 0 100 100" className="w-full h-full">
+                {/* Outer ring */}
                 <circle
-                  cx="30"
-                  cy="30"
-                  r={5 + explosion.frame * 2.5}
+                  cx="50"
+                  cy="50"
+                  r={10 + explosion.frame * 3}
                   fill="none"
                   stroke="#ff6b35"
-                  strokeWidth={3 - explosion.frame * 0.2}
-                  opacity={1 - explosion.frame * 0.08}
-                  style={{ filter: "drop-shadow(0 0 10px #ff6b35)" }}
+                  strokeWidth={Math.max(4 - explosion.frame * 0.2, 0.5)}
+                  opacity={Math.max(1 - explosion.frame * 0.05, 0)}
+                  style={{ filter: "drop-shadow(0 0 15px #ff6b35)" }}
                 />
+                {/* Middle ring */}
                 <circle
-                  cx="30"
-                  cy="30"
-                  r={3 + explosion.frame * 1.5}
-                  fill="#ffaa00"
-                  opacity={0.8 - explosion.frame * 0.06}
+                  cx="50"
+                  cy="50"
+                  r={5 + explosion.frame * 2}
+                  fill="none"
+                  stroke="#ffaa00"
+                  strokeWidth={Math.max(3 - explosion.frame * 0.15, 0.5)}
+                  opacity={Math.max(0.9 - explosion.frame * 0.045, 0)}
+                  style={{ filter: "drop-shadow(0 0 10px #ffaa00)" }}
                 />
+                {/* Core glow */}
+                <circle
+                  cx="50"
+                  cy="50"
+                  r={Math.max(8 - explosion.frame * 0.4, 0)}
+                  fill="#ffffff"
+                  opacity={Math.max(0.8 - explosion.frame * 0.04, 0)}
+                />
+                {/* Particle bursts */}
+                {[0, 45, 90, 135, 180, 225, 270, 315].map((angle, i) => (
+                  <circle
+                    key={i}
+                    cx={50 + Math.cos((angle * Math.PI) / 180) * (explosion.frame * 2.5)}
+                    cy={50 + Math.sin((angle * Math.PI) / 180) * (explosion.frame * 2.5)}
+                    r={Math.max(3 - explosion.frame * 0.15, 0)}
+                    fill="#ff6b35"
+                    opacity={Math.max(0.8 - explosion.frame * 0.04, 0)}
+                  />
+                ))}
+              </svg>
+            </div>
+          ))}
+
+          {/* Hit Effects - spark flashes when bullets hit */}
+          {hitEffects.map((hit) => (
+            <div
+              key={hit.id}
+              className="absolute pointer-events-none"
+              style={{
+                left: hit.x - 15,
+                top: hit.y - 15,
+                width: 30,
+                height: 30,
+              }}
+            >
+              <svg viewBox="0 0 30 30" className="w-full h-full">
+                {/* Flash core */}
+                <circle
+                  cx="15"
+                  cy="15"
+                  r={8 - hit.frame}
+                  fill="#ffffff"
+                  opacity={Math.max(1 - hit.frame * 0.12, 0)}
+                />
+                {/* Spark rays */}
+                {[0, 60, 120, 180, 240, 300].map((angle, i) => (
+                  <line
+                    key={i}
+                    x1="15"
+                    y1="15"
+                    x2={15 + Math.cos((angle * Math.PI) / 180) * (8 + hit.frame * 2)}
+                    y2={15 + Math.sin((angle * Math.PI) / 180) * (8 + hit.frame * 2)}
+                    stroke="#00ffff"
+                    strokeWidth={Math.max(2 - hit.frame * 0.2, 0.5)}
+                    opacity={Math.max(0.9 - hit.frame * 0.1, 0)}
+                    style={{ filter: "drop-shadow(0 0 4px #00ffff)" }}
+                  />
+                ))}
               </svg>
             </div>
           ))}
 
           {/* Start Screen */}
           {gameState === "start" && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm">
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm animate-in fade-in duration-500">
               <h1
-                className="text-5xl font-mono font-bold mb-4 tracking-widest"
+                className="text-5xl font-mono font-bold mb-4 tracking-widest animate-in slide-in-from-top-4 duration-700"
                 style={{
                   color: "#00c8ff",
                   textShadow: "0 0 20px #00c8ff, 0 0 40px #00c8ff",
+                  animation: "pulse 2s ease-in-out infinite",
                 }}
               >
                 SPACE CAR
               </h1>
               <h2
-                className="text-3xl font-mono mb-8"
+                className="text-3xl font-mono mb-8 animate-in slide-in-from-top-4 duration-700 delay-150"
                 style={{
                   color: "#ff6b35",
                   textShadow: "0 0 15px #ff6b35",
@@ -882,7 +983,7 @@ export default function SpaceCarGame() {
                 DEFENDER
               </h2>
               
-              <div className="flex flex-col gap-2 mb-8 text-center">
+              <div className="flex flex-col gap-2 mb-8 text-center animate-in fade-in duration-700 delay-300">
                 <p className="text-foreground/70 font-mono text-sm">
                   Use <span style={{ color: "#00c8ff" }}>Arrow Keys</span> or <span style={{ color: "#00c8ff" }}>A D</span> to move
                 </p>
@@ -896,7 +997,7 @@ export default function SpaceCarGame() {
 
               <button
                 onClick={startGame}
-                className="px-8 py-4 font-mono text-xl font-bold rounded-lg transition-all duration-200 hover:scale-105"
+                className="px-8 py-4 font-mono text-xl font-bold rounded-lg transition-all duration-200 hover:scale-110 hover:brightness-110 active:scale-95 animate-in zoom-in duration-500 delay-500"
                 style={{
                   background: "linear-gradient(180deg, #00c8ff 0%, #0088aa 100%)",
                   color: "#0a1a2a",
@@ -910,18 +1011,19 @@ export default function SpaceCarGame() {
 
           {/* Game Over Screen */}
           {gameState === "gameover" && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm">
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-300">
               <h1
-                className="text-5xl font-mono font-bold mb-4 tracking-widest"
+                className="text-5xl font-mono font-bold mb-4 tracking-widest animate-in zoom-in duration-500"
                 style={{
                   color: "#ff2255",
                   textShadow: "0 0 20px #ff2255, 0 0 40px #ff2255",
+                  animation: "shake 0.5s ease-in-out",
                 }}
               >
                 GAME OVER
               </h1>
               
-              <div className="flex flex-col gap-4 mb-8 text-center">
+              <div className="flex flex-col gap-4 mb-8 text-center animate-in slide-in-from-bottom-4 duration-500 delay-200">
                 <p
                   className="text-3xl font-mono font-bold"
                   style={{ color: "#00c8ff", textShadow: "0 0 10px #00c8ff" }}
@@ -936,8 +1038,12 @@ export default function SpaceCarGame() {
                 </p>
                 {score >= highScore && score > 0 && (
                   <p
-                    className="text-lg font-mono animate-pulse"
-                    style={{ color: "#00ff88", textShadow: "0 0 10px #00ff88" }}
+                    className="text-lg font-mono"
+                    style={{ 
+                      color: "#00ff88", 
+                      textShadow: "0 0 10px #00ff88",
+                      animation: "pulse 0.5s ease-in-out infinite",
+                    }}
                   >
                     NEW HIGH SCORE!
                   </p>
@@ -946,7 +1052,7 @@ export default function SpaceCarGame() {
 
               <button
                 onClick={startGame}
-                className="px-8 py-4 font-mono text-xl font-bold rounded-lg transition-all duration-200 hover:scale-105"
+                className="px-8 py-4 font-mono text-xl font-bold rounded-lg transition-all duration-200 hover:scale-110 hover:brightness-110 active:scale-95 animate-in zoom-in duration-500 delay-500"
                 style={{
                   background: "linear-gradient(180deg, #00ff88 0%, #00aa55 100%)",
                   color: "#0a2a1a",
