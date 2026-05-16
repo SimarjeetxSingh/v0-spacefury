@@ -6,6 +6,8 @@ interface Bullet {
   id: number
   x: number
   y: number
+  startX: number // Track starting position for wave calculation
+  startY: number
 }
 
 interface EnemyBullet {
@@ -209,8 +211,8 @@ export default function SpaceCarGame() {
     let lastTime = performance.now()
     let alienSpawnTimer = 0
     let bossSpawnTimer = 0
-    const baseSpawnInterval = 800 // Much faster base spawn
-    const bossSpawnInterval = 15000 // Boss every 15 seconds
+    const baseSpawnInterval = 1500 // Slower spawn rate
+    const bossSpawnInterval = 20000 // Boss every 20 seconds
 
     const gameLoop = (currentTime: number) => {
       const deltaTime = currentTime - lastTime
@@ -229,47 +231,28 @@ export default function SpaceCarGame() {
         return Math.max(0, Math.min(GAME_WIDTH - CAR_WIDTH, newX))
       })
 
-      // Shoot - much faster fire rate with triple shot at higher levels
+      // Shoot - much faster fire rate with wave pattern
       if (keysRef.current.has(" ") || keysRef.current.has("ArrowUp")) {
         const now = performance.now()
-        const fireRate = Math.max(80 - level * 5, 50) // Much faster shooting
+        const fireRate = Math.max(100 - level * 5, 60) // Fast shooting
         if (now - lastShotRef.current > fireRate) {
           lastShotRef.current = now
           const bulletsToAdd: Bullet[] = []
           const centerX = carXRef.current + CAR_WIDTH / 2 - BULLET_WIDTH / 2
+          const baseY = GAME_HEIGHT - CAR_HEIGHT - BULLET_HEIGHT - 20
           
-          // Always shoot center bullet
-          bulletsToAdd.push({
-            id: bulletIdRef.current++,
-            x: centerX,
-            y: GAME_HEIGHT - CAR_HEIGHT - BULLET_HEIGHT - 20,
-          })
+          // Wave fire pattern - bullets spread outward in waves
+          const bulletCount = level >= 6 ? 7 : level >= 3 ? 5 : 3
+          const spreadAngle = level >= 6 ? 40 : level >= 3 ? 30 : 20
           
-          // Add side bullets at level 3+
-          if (level >= 3) {
+          for (let i = 0; i < bulletCount; i++) {
+            const offset = (i - (bulletCount - 1) / 2) * (spreadAngle / (bulletCount - 1 || 1))
             bulletsToAdd.push({
               id: bulletIdRef.current++,
-              x: centerX - 15,
-              y: GAME_HEIGHT - CAR_HEIGHT - BULLET_HEIGHT - 15,
-            })
-            bulletsToAdd.push({
-              id: bulletIdRef.current++,
-              x: centerX + 15,
-              y: GAME_HEIGHT - CAR_HEIGHT - BULLET_HEIGHT - 15,
-            })
-          }
-          
-          // Add extra diagonal bullets at level 6+
-          if (level >= 6) {
-            bulletsToAdd.push({
-              id: bulletIdRef.current++,
-              x: centerX - 25,
-              y: GAME_HEIGHT - CAR_HEIGHT - BULLET_HEIGHT - 10,
-            })
-            bulletsToAdd.push({
-              id: bulletIdRef.current++,
-              x: centerX + 25,
-              y: GAME_HEIGHT - CAR_HEIGHT - BULLET_HEIGHT - 10,
+              x: centerX + offset,
+              y: baseY + Math.abs(offset) * 0.3, // Slight arc at start
+              startX: centerX + offset,
+              startY: baseY,
             })
           }
           
@@ -277,10 +260,22 @@ export default function SpaceCarGame() {
         }
       }
 
-      // Move bullets - faster player bullets
+      // Move bullets - wave pattern motion
       setBullets((prev) =>
         prev
-          .map((b) => ({ ...b, y: b.y - 18 })) // Faster bullets
+          .map((b) => {
+            const distanceTraveled = b.startY - b.y
+            const waveAmplitude = 15 // How wide the wave spreads
+            const waveFrequency = 0.02 // How fast the wave oscillates
+            const offsetFromCenter = b.startX - (carXRef.current + CAR_WIDTH / 2)
+            const waveOffset = Math.sin(distanceTraveled * waveFrequency) * waveAmplitude * Math.sign(offsetFromCenter)
+            
+            return {
+              ...b,
+              x: b.startX + waveOffset + (offsetFromCenter * distanceTraveled * 0.003), // Spread outward + wave
+              y: b.y - 16, // Fast upward movement
+            }
+          })
           .filter((b) => b.y > -BULLET_HEIGHT)
       )
 
@@ -307,16 +302,18 @@ export default function SpaceCarGame() {
         }))
       )
 
-      // Spawn regular aliens - much more frequently
+      // Spawn regular aliens - fewer at a time
       alienSpawnTimer += deltaTime
-      const spawnInterval = Math.max(baseSpawnInterval - level * 50, 300)
+      const spawnInterval = Math.max(baseSpawnInterval - level * 30, 500)
       if (alienSpawnTimer > spawnInterval) {
         alienSpawnTimer = 0
-        // Spawn 1-3 aliens at once depending on level
-        const spawnCount = Math.min(1 + Math.floor(level / 2), 3)
+        // Spawn only 1 alien at a time, max 2 at high levels
+        const spawnCount = level >= 5 ? 2 : 1
         setAliens((prev) => {
+          // Limit max aliens on screen
+          if (prev.length >= 6) return prev
           const newAliens = [...prev]
-          for (let i = 0; i < spawnCount; i++) {
+          for (let i = 0; i < spawnCount && newAliens.length < 6; i++) {
             newAliens.push(spawnAlien(level, false))
           }
           return newAliens
@@ -782,7 +779,7 @@ export default function SpaceCarGame() {
             </div>
           )}
 
-          {/* Player Bullets */}
+          {/* Player Bullets - Wave pattern */}
           {bullets.map((bullet) => (
             <div
               key={bullet.id}
@@ -790,15 +787,15 @@ export default function SpaceCarGame() {
               style={{
                 left: bullet.x,
                 top: bullet.y,
-                width: BULLET_WIDTH,
+                width: BULLET_WIDTH + 2,
                 height: BULLET_HEIGHT,
               }}
             >
               <div
                 className="w-full h-full rounded-full"
                 style={{
-                  background: "linear-gradient(180deg, #ff6b35 0%, #ffaa00 100%)",
-                  boxShadow: "0 0 10px #ff6b35, 0 0 20px #ff6b35",
+                  background: "linear-gradient(180deg, #00ffff 0%, #00c8ff 50%, #ff6b35 100%)",
+                  boxShadow: "0 0 12px #00c8ff, 0 0 24px #00c8ff, 0 -5px 15px #ff6b35",
                 }}
               />
             </div>
