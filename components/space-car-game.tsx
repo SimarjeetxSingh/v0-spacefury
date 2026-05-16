@@ -29,6 +29,22 @@ interface Alien {
   movePhase: number
 }
 
+interface SnakeSegment {
+  x: number
+  y: number
+}
+
+interface SnakeBoss {
+  id: number
+  segments: SnakeSegment[]
+  health: number
+  maxHealth: number
+  lastShot: number
+  direction: number
+  targetX: number
+  phase: number
+}
+
 interface Explosion {
   id: number
   x: number
@@ -62,6 +78,8 @@ const ALIEN_WIDTH = 50
 const ALIEN_HEIGHT = 50
 const BOSS_WIDTH = 80
 const BOSS_HEIGHT = 80
+const SNAKE_SEGMENT_SIZE = 35
+const SNAKE_LENGTH = 12
 
 // Alien types configuration
 const ALIEN_CONFIG = {
@@ -87,6 +105,7 @@ export default function SpaceCarGame() {
   const [explosions, setExplosions] = useState<Explosion[]>([])
   const [hitEffects, setHitEffects] = useState<HitEffect[]>([])
   const [stars, setStars] = useState<Star[]>([])
+  const [snakeBoss, setSnakeBoss] = useState<SnakeBoss | null>(null)
   const [screenShake, setScreenShake] = useState(0)
   const [isInvincible, setIsInvincible] = useState(false)
   
@@ -94,6 +113,7 @@ export default function SpaceCarGame() {
   const bulletIdRef = useRef(0)
   const enemyBulletIdRef = useRef(0)
   const alienIdRef = useRef(0)
+  const snakeIdRef = useRef(0)
   const explosionIdRef = useRef(0)
   const hitEffectIdRef = useRef(0)
   const lastShotRef = useRef(0)
@@ -185,6 +205,24 @@ export default function SpaceCarGame() {
     setHitEffects((prev) => [...prev, hitEffect])
   }, [])
 
+  const spawnSnakeBoss = useCallback((): SnakeBoss => {
+    const startX = GAME_WIDTH / 2
+    const segments: SnakeSegment[] = []
+    for (let i = 0; i < SNAKE_LENGTH; i++) {
+      segments.push({ x: startX, y: -50 - i * 25 })
+    }
+    return {
+      id: snakeIdRef.current++,
+      segments,
+      health: 100, // Very tough - needs many hits
+      maxHealth: 100,
+      lastShot: 0,
+      direction: 1,
+      targetX: GAME_WIDTH / 2,
+      phase: 0,
+    }
+  }, [])
+
   const startGame = useCallback(() => {
     setGameState("playing")
     setScore(0)
@@ -196,6 +234,7 @@ export default function SpaceCarGame() {
     setAliens([])
     setExplosions([])
     setHitEffects([])
+    setSnakeBoss(null)
     setScreenShake(0)
     setIsInvincible(false)
     keysRef.current.clear()
@@ -236,8 +275,10 @@ export default function SpaceCarGame() {
     let lastTime = performance.now()
     let alienSpawnTimer = 0
     let bossSpawnTimer = 0
+    let snakeSpawnTimer = 0
     const baseSpawnInterval = 1500 // Slower spawn rate
     const bossSpawnInterval = 20000 // Boss every 20 seconds
+    const snakeSpawnInterval = 45000 // Snake boss every 45 seconds
 
     const gameLoop = (currentTime: number) => {
       const deltaTime = currentTime - lastTime
@@ -351,6 +392,81 @@ export default function SpaceCarGame() {
         bossSpawnTimer = 0
         setAliens((prev) => [...prev, spawnAlien(level, true)])
       }
+
+      // Spawn snake boss periodically (level 3+)
+      snakeSpawnTimer += deltaTime
+      if (snakeSpawnTimer > snakeSpawnInterval && level >= 3) {
+        snakeSpawnTimer = 0
+        setSnakeBoss((prev) => prev ? prev : spawnSnakeBoss())
+      }
+
+      // Move snake boss
+      setSnakeBoss((prev) => {
+        if (!prev) return null
+        
+        const newPhase = prev.phase + 0.03
+        const headSpeed = 2
+        const currentCarX = carXRef.current
+        
+        // Head follows a sinusoidal pattern while tracking player
+        const targetX = currentCarX + CAR_WIDTH / 2 + Math.sin(newPhase * 2) * 150
+        const newTargetX = prev.targetX + (targetX - prev.targetX) * 0.02
+        
+        // Move head
+        const head = prev.segments[0]
+        const dx = newTargetX - head.x
+        const newHeadX = head.x + Math.sign(dx) * Math.min(Math.abs(dx) * 0.05, headSpeed)
+        const newHeadY = Math.min(head.y + 0.5, 80 + Math.sin(newPhase) * 30)
+        
+        // Update segments to follow
+        const newSegments = [{ x: newHeadX, y: newHeadY }]
+        for (let i = 1; i < prev.segments.length; i++) {
+          const prevSeg = newSegments[i - 1]
+          const currSeg = prev.segments[i]
+          const segDx = prevSeg.x - currSeg.x
+          const segDy = prevSeg.y - currSeg.y
+          const dist = Math.sqrt(segDx * segDx + segDy * segDy)
+          const targetDist = 28
+          if (dist > targetDist) {
+            const ratio = targetDist / dist
+            newSegments.push({
+              x: prevSeg.x - segDx * ratio,
+              y: prevSeg.y - segDy * ratio,
+            })
+          } else {
+            newSegments.push({ ...currSeg })
+          }
+        }
+        
+        // Snake shooting
+        const now = performance.now()
+        if (now - prev.lastShot > 800) {
+          // Shoot from multiple segments
+          setEnemyBullets((bullets) => {
+            const newBullets = [...bullets]
+            const shootIndices = [0, 3, 6, 9]
+            shootIndices.forEach((idx) => {
+              if (idx < newSegments.length) {
+                const seg = newSegments[idx]
+                const angle = Math.atan2(
+                  currentCarX + CAR_WIDTH / 2 - seg.x,
+                  GAME_HEIGHT - CAR_HEIGHT / 2 - seg.y
+                )
+                newBullets.push({
+                  id: enemyBulletIdRef.current++,
+                  x: seg.x,
+                  y: seg.y + SNAKE_SEGMENT_SIZE / 2,
+                  angle,
+                })
+              }
+            })
+            return newBullets
+          })
+          return { ...prev, segments: newSegments, targetX: newTargetX, phase: newPhase, lastShot: now }
+        }
+        
+        return { ...prev, segments: newSegments, targetX: newTargetX, phase: newPhase }
+      })
 
       // Move aliens and make them shoot - SLOWER speeds
       setAliens((prev) => {
@@ -479,6 +595,88 @@ export default function SpaceCarGame() {
         return prevBullets.filter((b) => !bulletsToRemove.has(b.id))
       })
 
+      // Check bullet-snake collision
+      setBullets((prevBullets) => {
+        let bulletsToRemove = new Set<number>()
+        
+        setSnakeBoss((prev) => {
+          if (!prev) return null
+          let damage = 0
+          
+          prevBullets.forEach((bullet) => {
+            prev.segments.forEach((seg, segIdx) => {
+              const segSize = segIdx === 0 ? SNAKE_SEGMENT_SIZE + 10 : SNAKE_SEGMENT_SIZE
+              if (
+                bullet.x > seg.x - segSize / 2 &&
+                bullet.x < seg.x + segSize / 2 &&
+                bullet.y > seg.y - segSize / 2 &&
+                bullet.y < seg.y + segSize / 2
+              ) {
+                bulletsToRemove.add(bullet.id)
+                damage += segIdx === 0 ? 2 : 1 // Head takes double damage
+                createHitEffect(bullet.x, bullet.y)
+              }
+            })
+          })
+          
+          if (damage > 0) {
+            const newHealth = prev.health - damage
+            if (newHealth <= 0) {
+              // Snake dies - big explosion on each segment
+              prev.segments.forEach((seg, i) => {
+                setTimeout(() => {
+                  createExplosion(seg.x, seg.y, 80)
+                }, i * 50)
+              })
+              setScore((s) => s + 5000)
+              return null
+            }
+            return { ...prev, health: newHealth }
+          }
+          return prev
+        })
+        
+        return prevBullets.filter((b) => !bulletsToRemove.has(b.id))
+      })
+
+      // Check snake-car collision
+      setSnakeBoss((prev) => {
+        if (!prev || isInvincible) return prev
+        
+        const currentCarX = carXRef.current
+        let hit = false
+        
+        prev.segments.forEach((seg) => {
+          if (
+            seg.x - SNAKE_SEGMENT_SIZE / 2 < currentCarX + CAR_WIDTH &&
+            seg.x + SNAKE_SEGMENT_SIZE / 2 > currentCarX &&
+            seg.y + SNAKE_SEGMENT_SIZE / 2 > GAME_HEIGHT - CAR_HEIGHT - 20 &&
+            seg.y - SNAKE_SEGMENT_SIZE / 2 < GAME_HEIGHT - 20
+          ) {
+            hit = true
+          }
+        })
+        
+        if (hit) {
+          createExplosion(currentCarX + CAR_WIDTH / 2, GAME_HEIGHT - CAR_HEIGHT, 60)
+          setCarHealth((h) => {
+            const newHealth = h - 1
+            if (newHealth <= 0) {
+              setScore((currentScore) => {
+                setHighScore((prevHigh) => Math.max(prevHigh, currentScore))
+                return currentScore
+              })
+              setGameState("gameover")
+            }
+            return newHealth
+          })
+          setIsInvincible(true)
+          setTimeout(() => setIsInvincible(false), 1500)
+        }
+        
+        return prev
+      })
+
       // Check enemy bullet-car collisions
       setEnemyBullets((prevEnemyBullets) => {
         if (isInvincible) return prevEnemyBullets
@@ -577,7 +775,7 @@ export default function SpaceCarGame() {
         cancelAnimationFrame(gameLoopRef.current)
       }
     }
-  }, [gameState, level, spawnAlien, createExplosion, createHitEffect, isInvincible])
+  }, [gameState, level, spawnAlien, spawnSnakeBoss, createExplosion, createHitEffect, isInvincible])
 
   const renderAlien = (alien: Alien) => {
     const isBoss = alien.type >= 4
@@ -598,75 +796,189 @@ export default function SpaceCarGame() {
       >
         <svg viewBox="0 0 50 50" className="w-full h-full">
           {alien.type === 1 && (
-            // Scout - green, simple
-            <g style={{ filter: "drop-shadow(0 0 6px #00ff88)" }}>
-              <ellipse cx="25" cy="25" rx="20" ry="15" fill="#0a3a2a" stroke="#00ff88" strokeWidth="2" />
-              <circle cx="18" cy="22" r="5" fill="#00ff88" />
-              <circle cx="32" cy="22" r="5" fill="#00ff88" />
-              <circle cx="18" cy="22" r="2" fill="#0a3a2a" />
-              <circle cx="32" cy="22" r="2" fill="#0a3a2a" />
+            // Scout - cute green alien with big eyes and antenna
+            <g style={{ filter: "drop-shadow(0 0 8px #00ff88)" }}>
+              {/* Body */}
+              <ellipse cx="25" cy="30" rx="18" ry="16" fill="#0a3a2a" stroke="#00ff88" strokeWidth="2" />
+              {/* Head dome */}
+              <ellipse cx="25" cy="20" rx="14" ry="12" fill="#0d4a35" stroke="#00ff88" strokeWidth="1.5" />
+              {/* Brain pattern */}
+              <path d="M15 18 Q20 14 25 18 Q30 14 35 18" fill="none" stroke="#00ff88" strokeWidth="1" opacity="0.5" />
+              {/* Eyes - big and cute */}
+              <ellipse cx="18" cy="22" rx="6" ry="7" fill="#001a10" stroke="#00ff88" strokeWidth="1" />
+              <ellipse cx="32" cy="22" rx="6" ry="7" fill="#001a10" stroke="#00ff88" strokeWidth="1" />
+              <circle cx="18" cy="21" r="4" fill="#00ff88" />
+              <circle cx="32" cy="21" r="4" fill="#00ff88" />
+              <circle cx="19" cy="20" r="1.5" fill="#ffffff" />
+              <circle cx="33" cy="20" r="1.5" fill="#ffffff" />
+              {/* Antenna */}
+              <line x1="20" y1="10" x2="16" y2="3" stroke="#00ff88" strokeWidth="2" />
+              <circle cx="16" cy="3" r="3" fill="#00ff88">
+                <animate attributeName="fill" values="#00ff88;#ffffff;#00ff88" dur="1s" repeatCount="indefinite" />
+              </circle>
+              <line x1="30" y1="10" x2="34" y2="3" stroke="#00ff88" strokeWidth="2" />
+              <circle cx="34" cy="3" r="3" fill="#00ff88">
+                <animate attributeName="fill" values="#ffffff;#00ff88;#ffffff" dur="1s" repeatCount="indefinite" />
+              </circle>
+              {/* Smile */}
+              <path d="M20 32 Q25 36 30 32" fill="none" stroke="#00ff88" strokeWidth="2" />
+              {/* Little arms */}
+              <ellipse cx="6" cy="30" rx="4" ry="6" fill="#0a3a2a" stroke="#00ff88" strokeWidth="1" />
+              <ellipse cx="44" cy="30" rx="4" ry="6" fill="#0a3a2a" stroke="#00ff88" strokeWidth="1" />
             </g>
           )}
           {alien.type === 2 && (
-            // Fighter - orange, angular
-            <g style={{ filter: "drop-shadow(0 0 6px #ff6b35)" }}>
-              <path d="M5 40 L15 10 L25 25 L35 10 L45 40 L25 35 Z" fill="#3a1a0a" stroke="#ff6b35" strokeWidth="2" />
-              <circle cx="18" cy="25" r="4" fill="#ff6b35" />
-              <circle cx="32" cy="25" r="4" fill="#ff6b35" />
-              <rect x="22" y="38" width="6" height="8" fill="#ff6b35" opacity="0.8">
-                <animate attributeName="opacity" values="0.8;0.4;0.8" dur="0.3s" repeatCount="indefinite" />
-              </rect>
+            // Fighter - angry orange alien with sharp features
+            <g style={{ filter: "drop-shadow(0 0 8px #ff6b35)" }}>
+              {/* Angular body */}
+              <path d="M8 45 L5 25 L15 8 L25 5 L35 8 L45 25 L42 45 L25 48 Z" fill="#3a1a0a" stroke="#ff6b35" strokeWidth="2" />
+              {/* Face plate */}
+              <path d="M12 35 L15 15 L25 12 L35 15 L38 35 L25 38 Z" fill="#2a0f05" stroke="#ff6b35" strokeWidth="1" />
+              {/* Angry eyes */}
+              <path d="M14 22 L22 25 L14 28 Z" fill="#ff6b35" />
+              <path d="M36 22 L28 25 L36 28 Z" fill="#ff6b35" />
+              <circle cx="18" cy="25" r="2" fill="#ffffff" />
+              <circle cx="32" cy="25" r="2" fill="#ffffff" />
+              {/* Frown */}
+              <path d="M20 33 L25 30 L30 33" fill="none" stroke="#ff6b35" strokeWidth="2" />
+              {/* Horns */}
+              <polygon points="10,12 15,8 12,20" fill="#ff6b35" />
+              <polygon points="40,12 35,8 38,20" fill="#ff6b35" />
+              {/* Engine glow */}
+              <ellipse cx="25" cy="47" rx="8" ry="5" fill="#ff6b35" opacity="0.6">
+                <animate attributeName="opacity" values="0.6;0.3;0.6" dur="0.2s" repeatCount="indefinite" />
+              </ellipse>
+              {/* Side weapons */}
+              <rect x="2" y="28" width="5" height="12" rx="1" fill="#ff6b35" />
+              <rect x="43" y="28" width="5" height="12" rx="1" fill="#ff6b35" />
             </g>
           )}
           {alien.type === 3 && (
-            // Hunter - red, aggressive
-            <g style={{ filter: "drop-shadow(0 0 8px #ff2255)" }}>
-              <polygon points="25,5 45,20 40,45 10,45 5,20" fill="#3a0a1a" stroke="#ff2255" strokeWidth="2" />
-              <circle cx="17" cy="25" r="6" fill="#ff2255" />
-              <circle cx="33" cy="25" r="6" fill="#ff2255" />
-              <circle cx="17" cy="25" r="3" fill="#ffffff" />
-              <circle cx="33" cy="25" r="3" fill="#ffffff" />
-              <path d="M15 38 L25 32 L35 38" stroke="#ff2255" strokeWidth="3" fill="none" />
+            // Hunter - menacing red alien with tentacles
+            <g style={{ filter: "drop-shadow(0 0 10px #ff2255)" }}>
+              {/* Main body - more organic */}
+              <ellipse cx="25" cy="25" rx="20" ry="18" fill="#3a0a1a" stroke="#ff2255" strokeWidth="2" />
+              {/* Armored plates */}
+              <path d="M10 20 L25 10 L40 20 L35 28 L15 28 Z" fill="#4a0f20" stroke="#ff2255" strokeWidth="1.5" />
+              {/* Three menacing eyes */}
+              <circle cx="15" cy="22" r="6" fill="#1a0510" stroke="#ff2255" strokeWidth="1" />
+              <circle cx="25" cy="18" r="5" fill="#1a0510" stroke="#ff2255" strokeWidth="1" />
+              <circle cx="35" cy="22" r="6" fill="#1a0510" stroke="#ff2255" strokeWidth="1" />
+              <circle cx="15" cy="22" r="3" fill="#ff2255">
+                <animate attributeName="fill" values="#ff2255;#ff0000;#ff2255" dur="0.5s" repeatCount="indefinite" />
+              </circle>
+              <circle cx="25" cy="18" r="2.5" fill="#ff2255">
+                <animate attributeName="fill" values="#ff0000;#ff2255;#ff0000" dur="0.5s" repeatCount="indefinite" />
+              </circle>
+              <circle cx="35" cy="22" r="3" fill="#ff2255">
+                <animate attributeName="fill" values="#ff2255;#ff0000;#ff2255" dur="0.5s" repeatCount="indefinite" />
+              </circle>
+              {/* Fangs */}
+              <polygon points="18,32 22,42 26,32" fill="#ff2255" />
+              <polygon points="28,32 32,42 24,32" fill="#ff2255" />
+              {/* Tentacles */}
+              <path d="M5 30 Q0 35 3 42" fill="none" stroke="#ff2255" strokeWidth="3" strokeLinecap="round">
+                <animate attributeName="d" values="M5 30 Q0 35 3 42;M5 30 Q-2 38 5 44;M5 30 Q0 35 3 42" dur="0.8s" repeatCount="indefinite" />
+              </path>
+              <path d="M45 30 Q50 35 47 42" fill="none" stroke="#ff2255" strokeWidth="3" strokeLinecap="round">
+                <animate attributeName="d" values="M45 30 Q50 35 47 42;M45 30 Q52 38 45 44;M45 30 Q50 35 47 42" dur="0.8s" repeatCount="indefinite" />
+              </path>
             </g>
           )}
           {alien.type === 4 && (
-            // Destroyer Boss - purple
-            <g style={{ filter: "drop-shadow(0 0 12px #aa00ff)" }}>
-              <path d="M5 45 L10 5 L25 15 L40 5 L45 45 L25 40 Z" fill="#2a0a3a" stroke="#aa00ff" strokeWidth="3" />
-              <circle cx="15" cy="25" r="8" fill="#aa00ff" />
-              <circle cx="35" cy="25" r="8" fill="#aa00ff" />
-              <circle cx="15" cy="25" r="4" fill="#ff00ff" />
-              <circle cx="35" cy="25" r="4" fill="#ff00ff" />
-              <rect x="20" y="35" width="10" height="12" fill="#aa00ff">
+            // Destroyer Boss - armored purple war machine
+            <g style={{ filter: "drop-shadow(0 0 15px #aa00ff)" }}>
+              {/* Heavy armored body */}
+              <path d="M5 45 L3 20 L12 5 L25 2 L38 5 L47 20 L45 45 L25 48 Z" fill="#2a0a3a" stroke="#aa00ff" strokeWidth="3" />
+              {/* Central core */}
+              <circle cx="25" cy="25" r="12" fill="#1a0525" stroke="#aa00ff" strokeWidth="2" />
+              <circle cx="25" cy="25" r="6" fill="#aa00ff">
+                <animate attributeName="r" values="6;8;6" dur="0.5s" repeatCount="indefinite" />
                 <animate attributeName="fill" values="#aa00ff;#ff00ff;#aa00ff" dur="0.5s" repeatCount="indefinite" />
-              </rect>
+              </circle>
+              {/* Eye slits */}
+              <rect x="10" y="18" width="10" height="4" rx="2" fill="#aa00ff" />
+              <rect x="30" y="18" width="10" height="4" rx="2" fill="#aa00ff" />
+              {/* Shoulder cannons */}
+              <rect x="0" y="15" width="8" height="18" rx="2" fill="#3a1050" stroke="#aa00ff" strokeWidth="2" />
+              <rect x="42" y="15" width="8" height="18" rx="2" fill="#3a1050" stroke="#aa00ff" strokeWidth="2" />
+              <circle cx="4" cy="33" r="3" fill="#ff00ff">
+                <animate attributeName="opacity" values="1;0.5;1" dur="0.3s" repeatCount="indefinite" />
+              </circle>
+              <circle cx="46" cy="33" r="3" fill="#ff00ff">
+                <animate attributeName="opacity" values="0.5;1;0.5" dur="0.3s" repeatCount="indefinite" />
+              </circle>
+              {/* Crown spikes */}
+              <polygon points="15,5 18,0 21,5" fill="#aa00ff" />
+              <polygon points="23,3 25,-2 27,3" fill="#aa00ff" />
+              <polygon points="29,5 32,0 35,5" fill="#aa00ff" />
             </g>
           )}
           {alien.type === 5 && (
-            // Annihilator Boss - pink/magenta
-            <g style={{ filter: "drop-shadow(0 0 15px #ff00aa)" }}>
-              <polygon points="25,2 48,15 45,40 30,48 20,48 5,40 2,15" fill="#3a0a2a" stroke="#ff00aa" strokeWidth="3" />
-              <circle cx="15" cy="22" r="7" fill="#ff00aa" />
-              <circle cx="35" cy="22" r="7" fill="#ff00aa" />
-              <circle cx="25" cy="32" r="5" fill="#ff00aa" />
-              <path d="M10 42 L25 35 L40 42" stroke="#ff00aa" strokeWidth="4" fill="none">
-                <animate attributeName="stroke" values="#ff00aa;#ffffff;#ff00aa" dur="0.3s" repeatCount="indefinite" />
+            // Annihilator Boss - ethereal pink energy being
+            <g style={{ filter: "drop-shadow(0 0 18px #ff00aa)" }}>
+              {/* Energy body */}
+              <ellipse cx="25" cy="25" rx="22" ry="20" fill="#3a0a2a" stroke="#ff00aa" strokeWidth="3" opacity="0.9" />
+              {/* Inner energy core */}
+              <ellipse cx="25" cy="25" rx="15" ry="13" fill="none" stroke="#ff00aa" strokeWidth="2" opacity="0.6">
+                <animate attributeName="rx" values="15;17;15" dur="1s" repeatCount="indefinite" />
+              </ellipse>
+              {/* Face - skull-like */}
+              <ellipse cx="16" cy="20" rx="7" ry="9" fill="#1a0515" stroke="#ff00aa" strokeWidth="1" />
+              <ellipse cx="34" cy="20" rx="7" ry="9" fill="#1a0515" stroke="#ff00aa" strokeWidth="1" />
+              <circle cx="16" cy="20" r="4" fill="#ff00aa">
+                <animate attributeName="fill" values="#ff00aa;#ffffff;#ff00aa" dur="0.3s" repeatCount="indefinite" />
+              </circle>
+              <circle cx="34" cy="20" r="4" fill="#ff00aa">
+                <animate attributeName="fill" values="#ffffff;#ff00aa;#ffffff" dur="0.3s" repeatCount="indefinite" />
+              </circle>
+              {/* Nose hole */}
+              <polygon points="25,26 22,32 28,32" fill="#1a0515" />
+              {/* Teeth */}
+              <rect x="17" y="36" width="3" height="5" fill="#ff00aa" />
+              <rect x="22" y="36" width="3" height="6" fill="#ff00aa" />
+              <rect x="27" y="36" width="3" height="5" fill="#ff00aa" />
+              {/* Energy tendrils */}
+              <path d="M5 25 Q-5 25 0 35" stroke="#ff00aa" strokeWidth="3" fill="none">
+                <animate attributeName="d" values="M5 25 Q-5 25 0 35;M5 25 Q-8 30 2 40;M5 25 Q-5 25 0 35" dur="0.6s" repeatCount="indefinite" />
               </path>
+              <path d="M45 25 Q55 25 50 35" stroke="#ff00aa" strokeWidth="3" fill="none">
+                <animate attributeName="d" values="M45 25 Q55 25 50 35;M45 25 Q58 30 48 40;M45 25 Q55 25 50 35" dur="0.6s" repeatCount="indefinite" />
+              </path>
+              {/* Crown */}
+              <path d="M10 8 L15 0 L20 6 L25 -2 L30 6 L35 0 L40 8" fill="none" stroke="#ff00aa" strokeWidth="2" />
             </g>
           )}
           {alien.type === 6 && (
-            // Overlord Boss - gold/orange
+            // Overlord Boss - golden emperor alien
             <g style={{ filter: "drop-shadow(0 0 20px #ffaa00)" }}>
-              <polygon points="25,0 50,12 48,38 35,50 15,50 2,38 0,12" fill="#3a2a0a" stroke="#ffaa00" strokeWidth="4" />
-              <circle cx="12" cy="20" r="8" fill="#ffaa00" />
-              <circle cx="38" cy="20" r="8" fill="#ffaa00" />
-              <circle cx="25" cy="30" r="6" fill="#ffaa00" />
-              <circle cx="12" cy="20" r="4" fill="#ff0000" />
-              <circle cx="38" cy="20" r="4" fill="#ff0000" />
-              <circle cx="25" cy="30" r="3" fill="#ff0000" />
-              <path d="M8 45 L25 38 L42 45" stroke="#ffaa00" strokeWidth="5" fill="none">
-                <animate attributeName="stroke" values="#ffaa00;#ff0000;#ffaa00" dur="0.2s" repeatCount="indefinite" />
-              </path>
+              {/* Royal body */}
+              <path d="M5 45 L2 18 L15 3 L25 0 L35 3 L48 18 L45 45 L25 50 Z" fill="#3a2a0a" stroke="#ffaa00" strokeWidth="3" />
+              {/* Inner robe */}
+              <path d="M12 42 L10 22 L20 12 L25 10 L30 12 L40 22 L38 42 Z" fill="#2a1a05" stroke="#ffaa00" strokeWidth="1" />
+              {/* Crown */}
+              <path d="M12 8 L15 -5 L20 5 L25 -8 L30 5 L35 -5 L38 8" fill="#ffaa00" />
+              <circle cx="25" cy="-3" r="4" fill="#ff0000">
+                <animate attributeName="fill" values="#ff0000;#ffff00;#ff0000" dur="0.5s" repeatCount="indefinite" />
+              </circle>
+              {/* Imperial eyes */}
+              <path d="M12 20 L23 18 L23 26 L12 24 Z" fill="#1a0a00" stroke="#ffaa00" strokeWidth="1" />
+              <path d="M38 20 L27 18 L27 26 L38 24 Z" fill="#1a0a00" stroke="#ffaa00" strokeWidth="1" />
+              <circle cx="17" cy="22" r="3" fill="#ff0000" />
+              <circle cx="33" cy="22" r="3" fill="#ff0000" />
+              <circle cx="17" cy="21" r="1" fill="#ffffff" />
+              <circle cx="33" cy="21" r="1" fill="#ffffff" />
+              {/* Beard */}
+              <path d="M18 30 L25 28 L32 30 L30 40 L25 42 L20 40 Z" fill="#ffaa00" opacity="0.8" />
+              {/* Scepters */}
+              <rect x="0" y="18" width="5" height="25" rx="2" fill="#ffaa00" />
+              <circle cx="2.5" cy="15" r="4" fill="#ff0000" />
+              <rect x="45" y="18" width="5" height="25" rx="2" fill="#ffaa00" />
+              <circle cx="47.5" cy="15" r="4" fill="#ff0000" />
+              {/* Bottom energy */}
+              <ellipse cx="25" cy="48" rx="12" ry="4" fill="#ffaa00" opacity="0.5">
+                <animate attributeName="opacity" values="0.5;0.8;0.5" dur="0.3s" repeatCount="indefinite" />
+              </ellipse>
             </g>
           )}
         </svg>
@@ -692,6 +1004,100 @@ export default function SpaceCarGame() {
           </div>
         )}
       </div>
+    )
+  }
+
+  const renderSnakeBoss = () => {
+    if (!snakeBoss) return null
+    
+    return (
+      <g>
+        {/* Render segments from tail to head so head is on top */}
+        {[...snakeBoss.segments].reverse().map((seg, reverseIdx) => {
+          const idx = snakeBoss.segments.length - 1 - reverseIdx
+          const isHead = idx === 0
+          const size = isHead ? SNAKE_SEGMENT_SIZE + 10 : SNAKE_SEGMENT_SIZE - idx * 0.8
+          const hue = 280 + idx * 3 // Purple to pink gradient
+          
+          return (
+            <div
+              key={idx}
+              className="absolute"
+              style={{
+                left: seg.x - size / 2,
+                top: seg.y - size / 2,
+                width: size,
+                height: size,
+                zIndex: isHead ? 100 : 50 - idx,
+              }}
+            >
+              <svg viewBox="0 0 50 50" className="w-full h-full" style={{ filter: `drop-shadow(0 0 ${isHead ? 15 : 8}px hsl(${hue}, 100%, 50%))` }}>
+                {isHead ? (
+                  // Snake head - dragon-like
+                  <g>
+                    <ellipse cx="25" cy="28" rx="22" ry="20" fill={`hsl(${hue}, 60%, 15%)`} stroke={`hsl(${hue}, 100%, 50%)`} strokeWidth="3" />
+                    {/* Snout */}
+                    <ellipse cx="25" cy="40" rx="12" ry="10" fill={`hsl(${hue}, 60%, 20%)`} stroke={`hsl(${hue}, 100%, 50%)`} strokeWidth="2" />
+                    {/* Eyes - menacing */}
+                    <ellipse cx="12" cy="22" rx="8" ry="10" fill={`hsl(${hue}, 70%, 10%)`} stroke={`hsl(${hue}, 100%, 50%)`} strokeWidth="2" />
+                    <ellipse cx="38" cy="22" rx="8" ry="10" fill={`hsl(${hue}, 70%, 10%)`} stroke={`hsl(${hue}, 100%, 50%)`} strokeWidth="2" />
+                    <ellipse cx="12" cy="22" rx="4" ry="6" fill={`hsl(${hue}, 100%, 50%)`}>
+                      <animate attributeName="fill" values={`hsl(${hue}, 100%, 50%);hsl(${hue}, 100%, 70%);hsl(${hue}, 100%, 50%)`} dur="0.3s" repeatCount="indefinite" />
+                    </ellipse>
+                    <ellipse cx="38" cy="22" rx="4" ry="6" fill={`hsl(${hue}, 100%, 50%)`}>
+                      <animate attributeName="fill" values={`hsl(${hue}, 100%, 70%);hsl(${hue}, 100%, 50%);hsl(${hue}, 100%, 70%)`} dur="0.3s" repeatCount="indefinite" />
+                    </ellipse>
+                    {/* Horns */}
+                    <polygon points="8,10 3,-5 15,8" fill={`hsl(${hue}, 100%, 50%)`} />
+                    <polygon points="42,10 47,-5 35,8" fill={`hsl(${hue}, 100%, 50%)`} />
+                    {/* Fangs */}
+                    <polygon points="18,42 15,55 22,45" fill="#ffffff" />
+                    <polygon points="32,42 35,55 28,45" fill="#ffffff" />
+                    {/* Nostrils */}
+                    <circle cx="20" cy="38" r="2" fill={`hsl(${hue}, 100%, 50%)`} />
+                    <circle cx="30" cy="38" r="2" fill={`hsl(${hue}, 100%, 50%)`} />
+                  </g>
+                ) : (
+                  // Body segment - scales pattern
+                  <g>
+                    <circle cx="25" cy="25" r="20" fill={`hsl(${hue}, 60%, ${15 + idx}%)`} stroke={`hsl(${hue}, 100%, 50%)`} strokeWidth="2" />
+                    {/* Scale pattern */}
+                    <path d="M10 20 Q15 15 20 20 Q25 15 30 20 Q35 15 40 20" fill="none" stroke={`hsl(${hue}, 80%, 40%)`} strokeWidth="2" opacity="0.5" />
+                    <path d="M10 30 Q15 25 20 30 Q25 25 30 30 Q35 25 40 30" fill="none" stroke={`hsl(${hue}, 80%, 40%)`} strokeWidth="2" opacity="0.5" />
+                    {/* Spine ridge */}
+                    <ellipse cx="25" cy="25" rx="4" ry="3" fill={`hsl(${hue}, 100%, 50%)`} opacity="0.6" />
+                  </g>
+                )}
+              </svg>
+            </div>
+          )
+        })}
+        {/* Snake health bar */}
+        <div 
+          className="absolute left-1/2 -translate-x-1/2"
+          style={{ 
+            top: 60,
+            width: 200,
+          }}
+        >
+          <div className="text-center text-xs font-mono mb-1" style={{ color: "#cc44ff", textShadow: "0 0 8px #cc44ff" }}>
+            COSMIC SERPENT
+          </div>
+          <div 
+            className="h-3 rounded-full"
+            style={{ background: "rgba(0,0,0,0.7)", border: "2px solid #cc44ff" }}
+          >
+            <div 
+              className="h-full rounded-full transition-all duration-150"
+              style={{ 
+                width: `${(snakeBoss.health / snakeBoss.maxHealth) * 100}%`,
+                background: "linear-gradient(90deg, #aa00ff, #ff00aa, #ff44cc)",
+                boxShadow: "0 0 10px #cc44ff",
+              }}
+            />
+          </div>
+        </div>
+      </g>
     )
   }
 
@@ -862,6 +1268,9 @@ export default function SpaceCarGame() {
 
           {/* Aliens */}
           {aliens.map(renderAlien)}
+
+          {/* Snake Boss */}
+          {renderSnakeBoss()}
 
           {/* Explosions - enhanced animation */}
           {explosions.map((explosion) => (
