@@ -229,37 +229,68 @@ export default function SpaceCarGame() {
         return Math.max(0, Math.min(GAME_WIDTH - CAR_WIDTH, newX))
       })
 
-      // Shoot
+      // Shoot - much faster fire rate with triple shot at higher levels
       if (keysRef.current.has(" ") || keysRef.current.has("ArrowUp")) {
         const now = performance.now()
-        const fireRate = Math.max(200 - level * 10, 100)
+        const fireRate = Math.max(80 - level * 5, 50) // Much faster shooting
         if (now - lastShotRef.current > fireRate) {
           lastShotRef.current = now
-          setBullets((prev) => [
-            ...prev,
-            {
+          const bulletsToAdd: Bullet[] = []
+          const centerX = carXRef.current + CAR_WIDTH / 2 - BULLET_WIDTH / 2
+          
+          // Always shoot center bullet
+          bulletsToAdd.push({
+            id: bulletIdRef.current++,
+            x: centerX,
+            y: GAME_HEIGHT - CAR_HEIGHT - BULLET_HEIGHT - 20,
+          })
+          
+          // Add side bullets at level 3+
+          if (level >= 3) {
+            bulletsToAdd.push({
               id: bulletIdRef.current++,
-              x: carXRef.current + CAR_WIDTH / 2 - BULLET_WIDTH / 2,
-              y: GAME_HEIGHT - CAR_HEIGHT - BULLET_HEIGHT - 20,
-            },
-          ])
+              x: centerX - 15,
+              y: GAME_HEIGHT - CAR_HEIGHT - BULLET_HEIGHT - 15,
+            })
+            bulletsToAdd.push({
+              id: bulletIdRef.current++,
+              x: centerX + 15,
+              y: GAME_HEIGHT - CAR_HEIGHT - BULLET_HEIGHT - 15,
+            })
+          }
+          
+          // Add extra diagonal bullets at level 6+
+          if (level >= 6) {
+            bulletsToAdd.push({
+              id: bulletIdRef.current++,
+              x: centerX - 25,
+              y: GAME_HEIGHT - CAR_HEIGHT - BULLET_HEIGHT - 10,
+            })
+            bulletsToAdd.push({
+              id: bulletIdRef.current++,
+              x: centerX + 25,
+              y: GAME_HEIGHT - CAR_HEIGHT - BULLET_HEIGHT - 10,
+            })
+          }
+          
+          setBullets((prev) => [...prev, ...bulletsToAdd])
         }
       }
 
-      // Move bullets
+      // Move bullets - faster player bullets
       setBullets((prev) =>
         prev
-          .map((b) => ({ ...b, y: b.y - 14 }))
+          .map((b) => ({ ...b, y: b.y - 18 })) // Faster bullets
           .filter((b) => b.y > -BULLET_HEIGHT)
       )
 
-      // Move enemy bullets
+      // Move enemy bullets - slower projectiles
       setEnemyBullets((prev) =>
         prev
           .map((b) => ({
             ...b,
-            x: b.x + Math.sin(b.angle) * 6,
-            y: b.y + Math.cos(b.angle) * 6,
+            x: b.x + Math.sin(b.angle) * 3, // Slower enemy bullets
+            y: b.y + Math.cos(b.angle) * 3,
           }))
           .filter((b) => b.y < GAME_HEIGHT + 20 && b.x > -20 && b.x < GAME_WIDTH + 20)
       )
@@ -299,21 +330,21 @@ export default function SpaceCarGame() {
         setAliens((prev) => [...prev, spawnAlien(level, true)])
       }
 
-      // Move aliens and make them shoot
+      // Move aliens and make them shoot - SLOWER speeds
       setAliens((prev) => {
-        const baseSpeed = 2 + level * 0.3
+        const baseSpeed = 0.8 + level * 0.1 // Much slower base speed
         return prev.map((a) => {
           const isBoss = a.type >= 4
-          const speed = isBoss ? baseSpeed * 0.6 : baseSpeed
+          const speed = isBoss ? baseSpeed * 0.5 : baseSpeed // Bosses even slower
           let newX = a.x
           let newY = a.y + speed
           const newPhase = a.movePhase + 0.05
 
-          // Movement patterns
+          // Movement patterns - gentler movements
           if (a.movePattern === "zigzag") {
-            newX = a.x + Math.sin(newPhase) * 3
-          } else if (a.movePattern === "dive" && a.y > 100) {
-            newY = a.y + speed * 1.5
+            newX = a.x + Math.sin(newPhase) * 1.5 // Reduced zigzag
+          } else if (a.movePattern === "dive" && a.y > 150) {
+            newY = a.y + speed * 1.2 // Reduced dive speed
           }
 
           // Keep within bounds
